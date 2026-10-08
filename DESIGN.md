@@ -2,46 +2,51 @@
 
 ## Problem and scope
 
-Turn one stored blog post into reviewed, platform-specific social posts, then publish approved versions on a durable schedule. The stored post is the only input to generation. Initial profiles cover Telegram, X-style (mock), and LinkedIn (mock); generation starts with Telegram and X-style in Phase 2. Telegram is the planned real publisher, using a channel the owner controls.
+Turn one stored blog post into reviewed, platform-specific drafts, then publish approved drafts at scheduled times. Generation reads only the stored source post. The application uses FastAPI, SQLite, SQL migration files, and a separate polling worker. The real publishing target is Telegram; X and LinkedIn are mock targets that save previews locally.
 
-## Constraint profiles
+## Platform profiles
 
-Length counts all characters, including spaces and hashtags. A tone rule is checked in code against a small, explicit vocabulary; it is a guardrail, not a claim of understanding prose.
+Length includes spaces and hashtags. Tone checks use a small phrase/word list as a practical guardrail.
 
-| Platform | Maximum length | Tone rule | Hashtags |
+| Platform | Maximum length | Tone rule | Maximum hashtags |
 | --- | ---: | --- | ---: |
-| Telegram | 4,096 | Clear and conversational; reject sales-push phrases such as “buy now” and “guaranteed” | 0–5 |
-| X-style (mock) | 280 | Concise and conversational; reject sales-push phrases | 0–2 |
-| LinkedIn (mock) | 3,000 | Professional; require one of “learn”, “insight”, or “experience”; reject sales-push phrases | 0–5 |
+| Telegram | 4,096 | Reject sales-push phrases such as “buy now”, “guaranteed”, and “act now” | 5 |
+| Mock X | 280 | Reject the same sales-push phrases | 2 |
+| Mock LinkedIn | 3,000 | Reject sales-push phrases; require “learn”, “insight”, or “experience” | 5 |
 
-Validation runs before a variant can enter review and returns named rule violations (for example, `maximum length` or `hashtag count`).
+Each stored post produces one draft for every configured profile. Validation runs before a draft is created or approved and returns named violations such as `maximum length`, `hashtag count`, or `tone rule`.
 
 ## Data model
 
-- `posts`: id, source type (`markdown` or `url`), original URL when present, title, stored body, created time.
-- `variants`: id, post id, platform, text, status (`draft`, `approved`, `rejected`, `published`), validation result, created/updated times.
-- `slots`: id, variant id, scheduled time, unique idempotency key derived from variant and slot, state (`pending`, `processing`, `published`, `failed`), lease/update times. Unique `(variant_id, scheduled_at)` prevents duplicate slots.
-- `publish_attempts`: id, slot id, attempt number, result, remote reference, error, started/finished times. Every attempt is retained; a successful result is unique per slot.
-- `mock_posts`: id, slot id, platform, preview text, created time. Unique slot id ensures a mock retry records one post.
+- **`posts`** stores the source type, optional URL, title, body, and creation time. It is the generation source of truth.
+- **`variants`** belongs to a post and stores platform, text, validation result, status, and timestamps. A post can have one variant per platform. Statuses are `draft`, `approved`, `rejected`, and `published`.
+- **`slots`** belongs to a variant and stores its timezone-normalized schedule time, idempotency key, state, and timestamps. `(variant_id, scheduled_at)` is unique. Slot states are `pending`, `processing`, `published`, and `failed`.
+- **`publish_attempts`** records each adapter call and its attempt number, result, remote reference, preview, error, and timestamps. A partial unique index allows at most one successful attempt per slot.
+- **`mock_posts`** stores mock adapter previews. Unique slot and idempotency-key constraints prevent a mock slot from recording twice.
 
-SQLite foreign keys are enabled. Status changes and claiming due slots happen in transactions. A stale `processing` lease can be reclaimed after restart. External delivery uses the slot idempotency key where supported; Telegram does not guarantee key-based deduplication, so a timeout after remote acceptance remains an explicit limitation that will be documented and handled conservatively.
+Schema changes live in ordered SQL files under `src/migrations/`. SQLite foreign keys are enabled, and repository updates and slot claims use transactions.
 
-## Publisher interface
+## Publishing and recovery
 
-`SocialPublisher.publish(*, text: str, idempotency_key: str) -> PublishResult`, where `PublishResult` contains `remote_id` and `preview`. Adapters are selected from configuration (`telegram`, `mock_x`, `mock_linkedin`). Services depend on this protocol, not concrete platform classes.
+Services use one interface: `SocialPublisher.publish(*, text, idempotency_key) -> PublishResult`. A result contains `remote_reference` and `preview`. Configuration selects Telegram, Mock X, or Mock LinkedIn; with no override, the adapter follows the variant platform. Adding an adapter should not require changing review or scheduling logic.
+
+The worker polls due `pending` slots every five seconds and records an attempt before calling the adapter. A successful slot is returned from its saved result on a repeated call. On restart, interrupted mock attempts are reconciled from the mock-post record or safely retried if no record exists. Telegram does not accept idempotency keys: an interrupted send with an unknown delivery outcome is held for a person to check and resolve through the API. Failed slots are not automatically retried; a confirmed undelivered slot can be retried manually.
 
 ## API surface
 
-- `POST /posts` — ingest pasted Markdown or fetch a URL and store it.
-- `POST /posts/{post_id}/variants` — generate configured variants from stored content.
-- `GET /posts/{post_id}` and `GET /posts/{post_id}/variants` — inspect source and variants.
-- `PATCH /variants/{variant_id}` — edit text after validation; editing returns it to `draft`.
-- `POST /variants/{variant_id}/approve` and `/reject` — review decision.
-- `POST /variants/{variant_id}/schedule` — create a future slot; reject non-approved variants with 4xx.
-- `GET /history` — inspect attempts and publish outcomes.
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health`, `GET /profiles` | Health check and platform rule profiles. |
+| `POST /posts`, `GET /posts/{post_id}` | Ingest Markdown or a public article URL; read the stored source. |
+| `POST /posts/{post_id}/variants`, `GET /posts/{post_id}/variants` | Generate all configured variants from the stored source; list them. |
+| `GET /variants/{variant_id}`, `PATCH /variants/{variant_id}` | Read or validate/edit a variant. Editing returns it to draft. |
+| `POST /variants/{variant_id}/approve`, `POST /variants/{variant_id}/reject` | Review a variant. Only an approved variant can be scheduled. |
+| `POST /variants/{variant_id}/schedule` | Create a future, timezone-aware slot. |
+| `POST /slots/{slot_id}/publish` | Publish a due slot immediately through its selected adapter. |
+| `POST /slots/{slot_id}/resolve` | Resolve an unknown Telegram attempt after checking whether it arrived. |
+| `GET /history` | Read publish attempts and outcomes, newest first. |
+| `POST /variants/validate` | Validate text against a profile without storing a variant. |
 
-## Architecture and non-goal
+## Non-goal
 
-FastAPI routes call small application services; services use SQLite repositories and the `SocialPublisher` protocol. A separate worker claims due slots, records attempts, and updates history. Mock adapters write previews to SQLite. Telegram configuration comes from environment variables; secrets are never stored in the database.
-
-**Non-goal:** media generation, analytics, and publishing to real X, LinkedIn, or Instagram accounts.
+This project does not generate media or provide analytics, and it never publishes to real X, LinkedIn, or Instagram accounts.

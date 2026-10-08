@@ -1,6 +1,6 @@
 import os
 
-from mock_publisher import MockPublisher
+from mock_publisher import MockLinkedInPublisher, MockXPublisher
 from publishers import SocialPublisher
 from telegram_publisher import TelegramPublisher
 
@@ -12,7 +12,7 @@ def configured_publisher(platform: str) -> SocialPublisher:
             os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
         )
     if name == "mock_x":
-        return MockPublisher(name, "Mock X")
+        return MockXPublisher()
     if name == "mock_linkedin":
-        return MockPublisher(name, "Mock LinkedIn")
+        return MockLinkedInPublisher()
     raise ValueError(f"Unknown publisher adapter '{name}'")

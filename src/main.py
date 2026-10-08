@@ -3,7 +3,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
 import repositories
@@ -17,8 +17,9 @@ from services import (
     generate_post_variants,
     ingest_markdown,
     ingest_url,
-    reject_variant,
     publish_slot,
+    reject_variant,
+    resolve_unknown_publication,
     schedule_variant,
 )
 
@@ -55,6 +56,11 @@ class VariantEdit(BaseModel):
 
 class ScheduleIn(BaseModel):
     scheduled_at: datetime
+
+
+class ResolvePublishIn(BaseModel):
+    delivered: bool
+    remote_reference: str | None = None
 
 
 def _public_http_url(value: str) -> bool:
@@ -186,6 +192,23 @@ def publish(slot_id: int) -> dict:
     except PublishFailure as error:
         status_code = 409 if error.uncertain else 502
         raise HTTPException(status_code=status_code, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/history")
+def publish_history(limit: int = Query(default=100, ge=1, le=500)) -> list[dict]:
+    return repositories.list_publish_history(limit)
+
+
+@app.post("/slots/{slot_id}/resolve")
+def resolve_publish(slot_id: int, payload: ResolvePublishIn) -> dict:
+    try:
+        return resolve_unknown_publication(
+            slot_id, payload.delivered, payload.remote_reference
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 

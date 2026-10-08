@@ -3,9 +3,8 @@ from publishers import PublishResult
 
 
 class MockPublisher:
-    def __init__(self, name: str, display_name: str):
-        self.name = name
-        self.display_name = display_name
+    name = ""
+    display_name = ""
 
     def publish(self, *, text: str, idempotency_key: str) -> PublishResult:
         preview = f"Would publish to {self.display_name}:\n\n{text}"
@@ -17,3 +16,13 @@ class MockPublisher:
         return PublishResult(
             remote_reference=f"mock:{record['id']}", preview=record["preview"]
         )
+
+
+class MockXPublisher(MockPublisher):
+    name = "mock_x"
+    display_name = "Mock X"
+
+
+class MockLinkedInPublisher(MockPublisher):
+    name = "mock_linkedin"
+    display_name = "Mock LinkedIn"

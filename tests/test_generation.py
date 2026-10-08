@@ -26,16 +26,17 @@ class GenerationTests(unittest.TestCase):
         self.setting.stop()
         self.temp_dir.cleanup()
 
-    def test_one_stored_post_creates_two_distinct_draft_variants(self):
+    def test_one_stored_post_creates_each_configured_draft_variant(self):
         post = ingest_markdown(
             "# Team notes\n\nClear notes help teams share decisions and follow up on work."
         )
         variants = generate_post_variants(post["id"])
 
         self.assertEqual(
-            {item["platform"] for item in variants}, {"telegram", "mock_x"}
+            {item["platform"] for item in variants},
+            {"telegram", "mock_x", "mock_linkedin"},
         )
-        self.assertNotEqual(variants[0]["text"], variants[1]["text"])
+        self.assertEqual(len({item["text"] for item in variants}), 3)
         self.assertTrue(all(item["status"] == "draft" for item in variants))
 
     def test_missing_post_cannot_generate_variants(self):

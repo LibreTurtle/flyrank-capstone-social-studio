@@ -13,7 +13,12 @@ def _first_sentences(body: str, limit: int) -> str:
 def generate_variants(body: str) -> dict[str, str]:
     telegram_text = _first_sentences(body, 850)
     x_text = _first_sentences(body, 205)
+    linkedin_text = (
+        f"{_first_sentences(body, 2700)}\n\n"
+        "One useful insight: these ideas can guide the next team discussion."
+    )
     return {
         "telegram": telegram_text,
         "mock_x": f"{x_text} #Ideas",
+        "mock_linkedin": linkedin_text,
     }

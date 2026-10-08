@@ -162,6 +162,140 @@ def get_successful_attempt(slot_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+def list_due_slots(now: str, limit: int = 50) -> list[dict]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT id, scheduled_at, state FROM slots "
+            "WHERE state = 'pending' AND scheduled_at <= ? "
+            "ORDER BY scheduled_at, id LIMIT ?",
+            (now, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def recover_interrupted_publications() -> dict[str, int]:
+    recovered = {"published": 0, "retryable": 0, "unknown": 0}
+    with connect() as connection:
+        interrupted = connection.execute(
+            "SELECT slots.id AS slot_id, slots.variant_id, publish_attempts.id AS attempt_id, "
+            "publish_attempts.adapter FROM slots JOIN publish_attempts "
+            "ON publish_attempts.slot_id = slots.id "
+            "WHERE slots.state = 'processing' AND publish_attempts.result = 'in_progress'"
+        ).fetchall()
+        for item in interrupted:
+            slot_id = item["slot_id"]
+            if item["adapter"] in {"mock_x", "mock_linkedin"}:
+                mock_post = connection.execute(
+                    "SELECT id, preview FROM mock_posts WHERE slot_id = ?", (slot_id,)
+                ).fetchone()
+                if mock_post:
+                    connection.execute(
+                        "UPDATE publish_attempts SET result = 'succeeded', remote_reference = ?, "
+                        "preview = ?, finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                        "WHERE id = ?",
+                        (
+                            f"mock:{mock_post['id']}",
+                            mock_post["preview"],
+                            item["attempt_id"],
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE slots SET state = 'published', updated_at = "
+                        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                        (slot_id,),
+                    )
+                    connection.execute(
+                        "UPDATE variants SET status = 'published', updated_at = "
+                        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                        (item["variant_id"],),
+                    )
+                    recovered["published"] += 1
+                else:
+                    connection.execute(
+                        "UPDATE publish_attempts SET result = 'failed', error = ?, "
+                        "finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                        (
+                            "Worker stopped before the mock post was recorded.",
+                            item["attempt_id"],
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE slots SET state = 'pending', updated_at = "
+                        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                        (slot_id,),
+                    )
+                    recovered["retryable"] += 1
+            else:
+                connection.execute(
+                    "UPDATE publish_attempts SET result = 'unknown', error = ?, "
+                    "finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                    (
+                        "Worker stopped before delivery could be confirmed. Check the target before retrying.",
+                        item["attempt_id"],
+                    ),
+                )
+                recovered["unknown"] += 1
+    return recovered
+
+
+def list_publish_history(limit: int = 100) -> list[dict]:
+    with connect() as connection:
+        rows = connection.execute(
+            "SELECT publish_attempts.id AS attempt_id, publish_attempts.slot_id, "
+            "slots.variant_id, variants.platform, posts.title, publish_attempts.attempt_number, "
+            "publish_attempts.adapter, publish_attempts.result, "
+            "publish_attempts.remote_reference, publish_attempts.preview, publish_attempts.error, "
+            "publish_attempts.started_at, publish_attempts.finished_at, slots.scheduled_at "
+            "FROM publish_attempts JOIN slots ON slots.id = publish_attempts.slot_id "
+            "JOIN variants ON variants.id = slots.variant_id "
+            "JOIN posts ON posts.id = variants.post_id "
+            "ORDER BY publish_attempts.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def resolve_unknown_publication(
+    slot_id: int, delivered: bool, remote_reference: str | None = None
+) -> dict:
+    with connect() as connection:
+        attempt = connection.execute(
+            "SELECT id FROM publish_attempts WHERE slot_id = ? AND result = 'unknown'",
+            (slot_id,),
+        ).fetchone()
+        if attempt is None:
+            raise ValueError("This slot has no unknown publish attempt")
+        if delivered and not remote_reference:
+            raise ValueError("A remote reference is required when delivery succeeded")
+
+        result = "succeeded" if delivered else "failed"
+        connection.execute(
+            "UPDATE publish_attempts SET result = ?, remote_reference = ?, error = ? "
+            "WHERE id = ?",
+            (
+                result,
+                remote_reference,
+                None
+                if delivered
+                else "Operator confirmed the message was not delivered.",
+                attempt["id"],
+            ),
+        )
+        connection.execute(
+            "UPDATE slots SET state = ?, updated_at = "
+            "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND state = 'processing'",
+            ("published" if delivered else "failed", slot_id),
+        )
+        if delivered:
+            connection.execute(
+                "UPDATE variants SET status = 'published', updated_at = "
+                "strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
+                "WHERE id = (SELECT variant_id FROM slots WHERE id = ?)",
+                (slot_id,),
+            )
+        return {"slot_id": slot_id, "state": "published" if delivered else "failed"}
+
+
 def claim_slot_for_publication(slot_id: int, adapter: str, now: str) -> dict:
     with connect() as connection:
         row = connection.execute(

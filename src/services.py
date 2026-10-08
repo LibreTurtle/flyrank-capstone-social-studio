@@ -148,3 +148,13 @@ def _publication_response(slot_id: int, attempt: dict, idempotent: bool) -> dict
         "preview": attempt["preview"],
         "idempotent": idempotent,
     }
+
+
+def resolve_unknown_publication(
+    slot_id: int, delivered: bool, remote_reference: str | None = None
+) -> dict:
+    if repositories.get_slot(slot_id) is None:
+        raise LookupError("Schedule slot not found")
+    return repositories.resolve_unknown_publication(
+        slot_id, delivered, remote_reference
+    )

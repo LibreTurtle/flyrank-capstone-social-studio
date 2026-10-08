@@ -5,12 +5,18 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 import repositories
 from database import connect, initialize_database
 from publishers import PublishFailure
-from services import approve_variant, generate_post_variants, ingest_markdown, publish_slot
+from services import (
+    approve_variant,
+    generate_post_variants,
+    ingest_markdown,
+    publish_slot,
+)
 from telegram_publisher import TelegramPublisher
-import httpx
 
 
 class PublishingTests(unittest.TestCase):
@@ -19,13 +25,17 @@ class PublishingTests(unittest.TestCase):
         self.environment = patch.dict(
             os.environ,
             {
-                "SOCIAL_STUDIO_DATABASE": str(Path(self.temp_dir.name) / "publish.sqlite3"),
+                "SOCIAL_STUDIO_DATABASE": str(
+                    Path(self.temp_dir.name) / "publish.sqlite3"
+                ),
                 "SOCIAL_PUBLISHER": "",
             },
         )
         self.environment.start()
         initialize_database()
-        post = ingest_markdown("# Team notes\n\nClear notes help teams share decisions.")
+        post = ingest_markdown(
+            "# Team notes\n\nClear notes help teams share decisions."
+        )
         variants = generate_post_variants(post["id"])
         self.variant = next(item for item in variants if item["platform"] == "mock_x")
 
@@ -58,10 +68,14 @@ class PublishingTests(unittest.TestCase):
                 connection.execute("SELECT COUNT(*) FROM mock_posts").fetchone()[0], 1
             )
             self.assertEqual(
-                connection.execute("SELECT COUNT(*) FROM publish_attempts").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM publish_attempts").fetchone()[
+                    0
+                ],
                 1,
             )
-        self.assertEqual(repositories.get_variant(self.variant["id"])["status"], "published")
+        self.assertEqual(
+            repositories.get_variant(self.variant["id"])["status"], "published"
+        )
 
     def test_unapproved_and_future_slots_are_not_published(self):
         timestamp = (datetime.now(UTC) - timedelta(minutes=1)).isoformat(
@@ -79,7 +93,9 @@ class PublishingTests(unittest.TestCase):
         approve_variant(self.variant["id"])
         future = repositories.create_slot(
             self.variant["id"],
-            (datetime.now(UTC) + timedelta(minutes=5)).isoformat(timespec="microseconds"),
+            (datetime.now(UTC) + timedelta(minutes=5)).isoformat(
+                timespec="microseconds"
+            ),
             "future-slot",
         )
         with self.assertRaisesRegex(ValueError, "not due"):
