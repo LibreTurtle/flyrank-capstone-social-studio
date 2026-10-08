@@ -59,3 +59,7 @@ The editor flagged `except Exception` in `process_due_slots` as a blind exceptio
 ### 2026-10-09 — API smoke-test environment limitation
 
 An HTTPX ASGI smoke attempt timed out while invoking synchronous FastAPI handlers through the environment's AnyIO worker thread. I used a direct route-level smoke run plus the service/repository feature tests instead. The smoke run created three variants, published one mock slot, read a successful history entry, and confirmed the repeated publish returned `idempotent: true`.
+
+## Dockerization — 2026-10-09
+
+I dockerized the whole application at the end of the project. I learned multi-stage image builds, build-time test gates, non-root containers, and health checks from a YouTube tutorial, then adapted them to this project. The builder installs the listed dependencies; the test stage runs the feature suite when source, tests, or requirements change; and the runtime stage runs as the dedicated `appuser` account. The image checks `/health` every 30 seconds. Docker Compose starts the API and worker as separate services sharing the persistent SQLite volume. Documentation is excluded from the build context, so documentation-only changes do not trigger the test stage. I tested Docker Compose successfully.

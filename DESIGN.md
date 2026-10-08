@@ -32,6 +32,8 @@ Services use one interface: `SocialPublisher.publish(*, text, idempotency_key) -
 
 The worker polls due `pending` slots every five seconds and records an attempt before calling the adapter. A successful slot is returned from its saved result on a repeated call. On restart, interrupted mock attempts are reconciled from the mock-post record or safely retried if no record exists. Telegram does not accept idempotency keys: an interrupted send with an unknown delivery outcome is held for a person to check and resolve through the API. Failed slots are not automatically retried; a confirmed undelivered slot can be retried manually.
 
+The application runs through Docker Compose: separate API and worker services use the same multi-stage image and share a persistent SQLite volume. The image runs tests in a cached build stage when source, tests, or dependencies change, then runs the application as a non-root user. A container health check polls `/health` every 30 seconds. Documentation files are excluded from the build context.
+
 ## API surface
 
 | Method and path | Purpose |

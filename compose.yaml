@@ -1,0 +1,32 @@
+services:
+  api:
+    build: .
+    image: social-media-studio:local
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      SOCIAL_STUDIO_DATABASE: /data/social_studio.sqlite3
+    volumes:
+      - social-studio-data:/data
+    restart: unless-stopped
+
+  worker:
+    image: social-media-studio:local
+    command: ["python", "-m", "worker"]
+    env_file:
+      - .env
+    environment:
+      SOCIAL_STUDIO_DATABASE: /data/social_studio.sqlite3
+    volumes:
+      - social-studio-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+volumes:
+  social-studio-data:

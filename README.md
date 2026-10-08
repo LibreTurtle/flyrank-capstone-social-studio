@@ -4,40 +4,32 @@ Social Media Studio stores a blog post, generates platform-specific drafts, lets
 
 ## Requirements
 
-- Python 3.14 or newer
-- Dependencies from `requirements.txt`
+- Docker Engine with the Docker Compose plugin
 - A Telegram bot and a channel or chat where the bot is allowed to post
 
 ## Setup and run
 
 ```bash
-python3.14 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
 cp -n .env.example .env
 ```
 
 Edit `.env` as needed. Leave `SOCIAL_PUBLISHER` blank to use the variant's platform, or set it to `telegram`, `mock_x`, or `mock_linkedin`. For Telegram, set the bot token and chat ID. Keep `.env` private.
 
-Start the API from the project root:
+Start the application from the project root:
 
 ```bash
-PYTHONPATH=src .venv/bin/uvicorn main:app --reload
+docker compose up --build
 ```
+
+Compose builds the image and starts both the API and worker. The containers share a persistent SQLite volume. The API is available at `http://localhost:8000`, with interactive docs at `http://localhost:8000/docs`. Stop the services with `Ctrl+C`; use `docker compose down` to remove the containers while keeping the database volume.
 
 Seed one sample campaign (run once; it schedules a mock X post two minutes ahead):
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m seed
+docker compose run --rm api python -m seed
 ```
 
-Start the durable scheduler in another terminal:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m worker
-```
-
-The worker checks SQLite for due slots every five seconds. To process one batch and exit, run `PYTHONPATH=src .venv/bin/python -m worker --once`.
+The worker checks SQLite for due slots every five seconds and starts automatically with Compose.
 
 ## Create and publish a campaign
 
@@ -79,9 +71,7 @@ With the API running, open [http://localhost:8000/docs](http://localhost:8000/do
 
 ## Tests
 
-```bash
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
-```
+The Docker build includes a test stage that runs the feature suite before producing the runtime image. It runs when application code, tests, or `requirements.txt` change. Documentation is excluded from the build context, so documentation-only changes do not rerun the tests. A failing test prevents the runtime image from building and Compose from starting the application.
 
 ## Architecture
 
@@ -90,8 +80,10 @@ flowchart TD
     Author[Markdown or article URL] --> API[FastAPI]
     API --> Ingest[Ingestion and variant generation]
     Ingest --> Review[Review and scheduling]
-    Review --> DB[(SQLite: posts, variants, slots, attempts)]
-    Worker[Polling worker] --> DB
+    Compose[Docker Compose] --> API
+    Compose --> Worker[Polling worker]
+    Review --> DB[(Shared SQLite volume: posts, variants, slots, attempts)]
+    Worker --> DB
     Worker --> Publisher[SocialPublisher interface]
     API --> Publisher
     Publisher --> Telegram[Telegram adapter]
