@@ -1,12 +1,22 @@
+import logging
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import datetime
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel, Field, model_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 import repositories
+from api_responses import ResponseEnvelopeMiddleware, error_envelope, error_message
 from database import initialize_database
 from environment import load_environment_file
 from profiles import PROFILES, validate_variant
@@ -32,6 +42,153 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Social Media Studio", lifespan=lifespan)
+app.add_middleware(ResponseEnvelopeMiddleware)
+logger = logging.getLogger(__name__)
+
+
+def _exception_headers(
+    request: Request, extra: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    headers = dict(extra or {})
+    headers["X-Request-ID"] = getattr(request.state, "request_id", "unavailable")
+    return headers
+
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_http_exception(
+    request: Request, error: StarletteHTTPException
+) -> JSONResponse:
+    error_type = "validation_error" if error.status_code == 422 else "request_error"
+    return JSONResponse(
+        error_envelope(
+            error_message(error.detail),
+            {"type": error_type, "details": error.detail},
+        ),
+        status_code=error.status_code,
+        headers=_exception_headers(request, error.headers),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    request: Request, error: RequestValidationError
+) -> JSONResponse:
+    details = jsonable_encoder(error.errors())
+    return JSONResponse(
+        error_envelope(
+            error_message(details), {"type": "validation_error", "details": details}
+        ),
+        status_code=422,
+        headers=_exception_headers(request),
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(
+    request: Request, error: Exception
+) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", "unavailable")
+    logger.error(
+        "Unhandled API error request_id=%s method=%s path=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    return JSONResponse(
+        error_envelope(
+            "Internal server error",
+            {
+                "type": "internal_server_error",
+                "details": "An unexpected error occurred",
+            },
+        ),
+        status_code=500,
+        headers=_exception_headers(request),
+    )
+
+
+def custom_openapi() -> dict:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    success_schema = {
+        "type": "object",
+        "required": ["success", "message", "timestamp", "data"],
+        "properties": {
+            "success": {"type": "boolean", "enum": [True]},
+            "message": {"type": "string"},
+            "timestamp": {"type": "string", "format": "date-time"},
+            "data": {},
+        },
+    }
+    error_schema = {
+        "type": "object",
+        "required": ["success", "message", "timestamp", "error"],
+        "properties": {
+            "success": {"type": "boolean", "enum": [False]},
+            "message": {"type": "string"},
+            "timestamp": {"type": "string", "format": "date-time"},
+            "error": {
+                "type": "object",
+                "required": ["type", "details"],
+                "properties": {
+                    "type": {"type": "string"},
+                    "details": {},
+                },
+            },
+        },
+    }
+    for path in schema["paths"].values():
+        for operation in path.values():
+            for status, response in operation.get("responses", {}).items():
+                code = int(status) if status.isdigit() else 0
+                response_data_schema = (
+                    response.get("content", {})
+                    .get("application/json", {})
+                    .get("schema")
+                )
+                if code == 0 or code < 400:
+                    target = deepcopy(success_schema)
+                    if response_data_schema is not None:
+                        target["properties"]["data"] = response_data_schema
+                else:
+                    target = error_schema
+                if code == 204:
+                    continue
+                response["content"] = {"application/json": {"schema": target}}
+                response.setdefault("headers", {})["X-Request-ID"] = {
+                    "description": "Unique identifier for this request",
+                    "schema": {"type": "string", "format": "uuid"},
+                }
+            operation.setdefault("responses", {}).setdefault(
+                "500",
+                {
+                    "description": "Internal server error",
+                    "content": {"application/json": {"schema": error_schema}},
+                    "headers": {
+                        "X-Request-ID": {"schema": {"type": "string", "format": "uuid"}}
+                    },
+                },
+            )
+            operation["responses"].setdefault(
+                "default",
+                {
+                    "description": "Other API error",
+                    "content": {"application/json": {"schema": error_schema}},
+                    "headers": {
+                        "X-Request-ID": {
+                            "description": "Unique identifier for this request",
+                            "schema": {"type": "string", "format": "uuid"},
+                        }
+                    },
+                },
+            )
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 
 class PostIn(BaseModel):
@@ -82,16 +239,17 @@ def health() -> dict:
 
 
 @app.get("/profiles")
-def profiles() -> dict:
-    return {
-        name: {
+def profiles() -> list[dict]:
+    return [
+        {
+            "platform": name,
             "max_length": profile.max_length,
             "max_hashtags": profile.max_hashtags,
             "blocked_phrases": list(profile.blocked_phrases),
             "required_tone_words": list(profile.required_tone_words),
         }
         for name, profile in PROFILES.items()
-    }
+    ]
 
 
 @app.post("/posts", status_code=201)
@@ -215,7 +373,8 @@ def resolve_publish(slot_id: int, payload: ResolvePublishIn) -> dict:
 
 @app.post("/variants/validate")
 def check_variant(payload: VariantCheck) -> dict:
-    problems = validate_variant(payload.platform, payload.text)
-    if problems:
-        raise HTTPException(status_code=422, detail=problems)
-    return {"valid": True, "platform": payload.platform}
+    result = validate_variant(payload.platform, payload.text)
+    result["platform"] = payload.platform
+    if not result["valid"]:
+        raise HTTPException(status_code=422, detail=result)
+    return result

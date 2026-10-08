@@ -63,3 +63,11 @@ An HTTPX ASGI smoke attempt timed out while invoking synchronous FastAPI handler
 ## Dockerization — 2026-10-09
 
 I dockerized the whole application at the end of the project. I learned multi-stage image builds, build-time test gates, non-root containers, and health checks from a YouTube tutorial, then adapted them to this project. The builder installs the listed dependencies; the test stage runs the feature suite when source, tests, or requirements change; and the runtime stage runs as the dedicated `appuser` account. The image checks `/health` every 30 seconds. Docker Compose starts the API and worker as separate services sharing the persistent SQLite volume. Documentation is excluded from the build context, so documentation-only changes do not trigger the test stage. I tested Docker Compose successfully.
+
+## Additional feature — API contract standardization
+
+I standardized JSON responses with `success`, `message`, and `timestamp`, plus `data` for success or an `error` object containing `type` and `details` for failure. Responses retain their correct HTTP status and include an `X-Request-ID` header for log tracing. Successful `data` keeps the route's natural shape, while `validate_variant()` returns a dictionary with `valid` and `errors`. I updated the OpenAPI schema and feature tests.
+
+## Additional feature — Global exception handling
+
+I added FastAPI exception handlers for HTTP errors, request validation errors, and unexpected exceptions. They return the shared error envelope and preserve HTTP status codes. Unexpected errors are logged with the request ID and return a safe generic detail to clients. I also moved the documentation path collection into the response middleware initializer to clear the mutable class attribute warning. The latest feature suite and Bruno YAML checks pass.

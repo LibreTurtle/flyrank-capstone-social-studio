@@ -63,7 +63,9 @@ All request and response bodies use JSON. Path values such as `{post_id}` are in
 | `POST /slots/{slot_id}/resolve`        | Resolves an uncertain delivery after a person checks the target. Send `{"delivered": true, "remote_reference": "chat-id:message-id"}` if it arrived, or `{"delivered": false}` if it did not. |
 | `POST /variants/validate`              | Checks text against a platform profile without storing it. Provide `platform` and `text`.                                                                                                     |
 
-Scheduling requires an approved variant. Validation or review conflicts return a 4xx response with a detail explaining the rejection; publishing errors return 409 or 502 depending on whether delivery is uncertain or rejected.
+JSON API responses use `success`, `message`, and `timestamp`, with `data` for success or an `error` object containing `type` and `details` for failure. The `data` value keeps the endpoint's natural JSON shape. Error responses preserve their HTTP status, and every response includes an `X-Request-ID` header for log tracing. Global handlers format HTTP errors, request validation errors, and unexpected exceptions; internal errors return a safe generic detail.
+
+Scheduling requires an approved variant. Validation or review conflicts return a 4xx response with the reason in `error.details`; publishing errors return 409 or 502 depending on whether delivery is uncertain or rejected.
 
 ## Interactive API docs
 

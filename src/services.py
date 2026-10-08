@@ -41,9 +41,9 @@ def generate_post_variants(post_id: int) -> list[dict]:
     generated = generate_variants(post["body"])
     variants = []
     for platform, text in generated.items():
-        problems = validate_variant(platform, text)
-        if problems:
-            raise ValueError("; ".join(problems))
+        validation = validate_variant(platform, text)
+        if not validation["valid"]:
+            raise ValueError("; ".join(validation["errors"]))
         variants.append(repositories.create_variant(post_id, platform, text))
     return variants
 
@@ -54,9 +54,9 @@ def edit_variant(variant_id: int, text: str) -> dict:
         raise LookupError("Variant not found")
     if not text.strip():
         raise ValueError("text cannot be blank")
-    problems = validate_variant(variant["platform"], text)
-    if problems:
-        raise ValueError("; ".join(problems))
+    validation = validate_variant(variant["platform"], text)
+    if not validation["valid"]:
+        raise ValueError("; ".join(validation["errors"]))
     updated = repositories.update_variant_text(variant_id, text)
     if updated is None:
         raise LookupError("Variant not found")
@@ -67,9 +67,9 @@ def approve_variant(variant_id: int) -> dict:
     variant = repositories.get_variant(variant_id)
     if variant is None:
         raise LookupError("Variant not found")
-    problems = validate_variant(variant["platform"], variant["text"])
-    if problems:
-        raise ValueError("; ".join(problems))
+    validation = validate_variant(variant["platform"], variant["text"])
+    if not validation["valid"]:
+        raise ValueError("; ".join(validation["errors"]))
     updated = repositories.set_variant_status(variant_id, "approved")
     if updated is None:
         raise LookupError("Variant not found")

@@ -26,10 +26,13 @@ PROFILES = {
 }
 
 
-def validate_variant(platform: str, text: str) -> list[str]:
+def validate_variant(platform: str, text: str) -> dict:
     profile = PROFILES.get(platform)
     if profile is None:
-        return [f"platform profile: unsupported platform '{platform}'"]
+        return {
+            "valid": False,
+            "errors": [f"platform profile: unsupported platform '{platform}'"],
+        }
 
     problems = []
     if len(text) > profile.max_length:
@@ -52,4 +55,4 @@ def validate_variant(platform: str, text: str) -> list[str]:
         for word in profile.required_tone_words
     ):
         problems.append("tone rule: include 'learn', 'insight', or 'experience'")
-    return problems
+    return {"valid": not problems, "errors": problems}

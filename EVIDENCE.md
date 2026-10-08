@@ -8,7 +8,25 @@ I ran:
 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Output: `Ran 28 tests in 0.139s` and `OK`.
+Output: `Ran 41 tests in 0.157s` and `OK`.
+
+### API response contract
+
+- `test_success_response_has_envelope_and_request_id` — `ok`; success data is nested under `data`, includes a UTC timestamp, and has a UUID `X-Request-ID` header.
+- `test_list_response_stays_a_list_inside_data` — `ok`; list results remain JSON arrays under `data`.
+- `test_error_preserves_status_and_detail` — `ok`; a 422 remains 422 and its detail is returned in the dictionary at `error.details` with `success: false`.
+- `test_validation_error_keeps_multiple_details_in_error_object` — `ok`; multiple validation messages remain available under `error.details`.
+- `test_request_error_wraps_string_detail_in_error_object` — `ok`; operation failures use the same dictionary shape.
+- `test_profiles_route_returns_a_list_of_named_profiles` — `ok`; `/profiles` returns an array containing each platform name.
+- `test_openapi_keeps_document_shape_and_request_id_header` — `ok`; the OpenAPI document remains directly accessible and includes the request ID header.
+- `test_invalid_variant_route_raises_with_structured_validation_detail` — `ok`; the route receives the validator's dictionary result and includes it in its validation error.
+- `test_existing_error_envelope_is_not_wrapped_again` — `ok`; global exception responses keep a single envelope when they pass through the middleware.
+- `test_http_exception_returns_error_envelope_and_status` — `ok`; HTTP errors preserve status and request ID.
+- `test_request_validation_exception_keeps_structured_details` — `ok`; FastAPI request validation errors use the shared envelope and retain structured details.
+- `test_unexpected_exception_returns_safe_500_envelope` — `ok`; unexpected errors return a safe 500 response with a request ID.
+- `test_global_handler_gets_request_id_from_middleware` — `ok`; an unhandled route exception is converted by FastAPI's global handler and keeps the middleware-generated request ID.
+
+I also inspected the generated `/openapi.json`: documented success and error responses use the matching envelope schema, and each operation documents `X-Request-ID`.
 
 ### Ingestion and generation
 

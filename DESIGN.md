@@ -8,13 +8,13 @@ Turn one stored blog post into reviewed, platform-specific drafts, then publish 
 
 Length includes spaces and hashtags. Tone checks use a small phrase/word list as a practical guardrail.
 
-| Platform | Maximum length | Tone rule | Maximum hashtags |
-| --- | ---: | --- | ---: |
-| Telegram | 4,096 | Reject sales-push phrases such as “buy now”, “guaranteed”, and “act now” | 5 |
-| Mock X | 280 | Reject the same sales-push phrases | 2 |
-| Mock LinkedIn | 3,000 | Reject sales-push phrases; require “learn”, “insight”, or “experience” | 5 |
+| Platform      | Maximum length | Tone rule                                                                | Maximum hashtags |
+| ------------- | -------------: | ------------------------------------------------------------------------ | ---------------: |
+| Telegram      |          4,096 | Reject sales-push phrases such as “buy now”, “guaranteed”, and “act now” |                5 |
+| Mock X        |            280 | Reject the same sales-push phrases                                       |                2 |
+| Mock LinkedIn |          3,000 | Reject sales-push phrases; require “learn”, “insight”, or “experience”   |                5 |
 
-Each stored post produces one draft for every configured profile. Validation runs before a draft is created or approved and returns named violations such as `maximum length`, `hashtag count`, or `tone rule`.
+Each stored post produces one draft for every configured profile. Validation runs before a draft is created or approved and returns a dictionary with `valid` and `errors`; violations include names such as `maximum length`, `hashtag count`, or `tone rule`.
 
 ## Data model
 
@@ -36,18 +36,20 @@ The application runs through Docker Compose: separate API and worker services us
 
 ## API surface
 
-| Method and path | Purpose |
-| --- | --- |
-| `GET /health`, `GET /profiles` | Health check and platform rule profiles. |
-| `POST /posts`, `GET /posts/{post_id}` | Ingest Markdown or a public article URL; read the stored source. |
-| `POST /posts/{post_id}/variants`, `GET /posts/{post_id}/variants` | Generate all configured variants from the stored source; list them. |
-| `GET /variants/{variant_id}`, `PATCH /variants/{variant_id}` | Read or validate/edit a variant. Editing returns it to draft. |
-| `POST /variants/{variant_id}/approve`, `POST /variants/{variant_id}/reject` | Review a variant. Only an approved variant can be scheduled. |
-| `POST /variants/{variant_id}/schedule` | Create a future, timezone-aware slot. |
-| `POST /slots/{slot_id}/publish` | Publish a due slot immediately through its selected adapter. |
-| `POST /slots/{slot_id}/resolve` | Resolve an unknown Telegram attempt after checking whether it arrived. |
-| `GET /history` | Read publish attempts and outcomes, newest first. |
-| `POST /variants/validate` | Validate text against a profile without storing a variant. |
+Every JSON response has a consistent envelope. Success responses contain `success: true`, a human-readable `message`, an ISO 8601 UTC `timestamp`, and the route result under `data`, retaining its natural JSON shape (object or array). Error responses contain `success: false`, `message`, `timestamp`, and an `error` object with a `type` and original `details`. Error types distinguish validation failures, request or workflow failures, and internal server errors. Global handlers format HTTP errors, request validation errors, and unexpected exceptions. HTTP status codes continue to distinguish success, client errors, and publishing failures. Each HTTP response also includes a generated UUID in the `X-Request-ID` header, which is written to the API log for request tracing. Swagger's OpenAPI schema documents response data shapes, both envelopes, and the response header.
+
+| Method and path                                                             | Purpose                                                                |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `GET /health`, `GET /profiles`                                              | Health check and platform rule profiles.                               |
+| `POST /posts`, `GET /posts/{post_id}`                                       | Ingest Markdown or a public article URL; read the stored source.       |
+| `POST /posts/{post_id}/variants`, `GET /posts/{post_id}/variants`           | Generate all configured variants from the stored source; list them.    |
+| `GET /variants/{variant_id}`, `PATCH /variants/{variant_id}`                | Read or validate/edit a variant. Editing returns it to draft.          |
+| `POST /variants/{variant_id}/approve`, `POST /variants/{variant_id}/reject` | Review a variant. Only an approved variant can be scheduled.           |
+| `POST /variants/{variant_id}/schedule`                                      | Create a future, timezone-aware slot.                                  |
+| `POST /slots/{slot_id}/publish`                                             | Publish a due slot immediately through its selected adapter.           |
+| `POST /slots/{slot_id}/resolve`                                             | Resolve an unknown Telegram attempt after checking whether it arrived. |
+| `GET /history`                                                              | Read publish attempts and outcomes, newest first.                      |
+| `POST /variants/validate`                                                   | Validate text against a profile without storing a variant.             |
 
 ## Non-goal
 
