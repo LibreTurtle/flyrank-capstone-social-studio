@@ -1,5 +1,7 @@
 import os
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 MIGRATIONS = Path(__file__).parent / "migrations"
@@ -9,11 +11,19 @@ def database_path() -> str:
     return os.getenv("SOCIAL_STUDIO_DATABASE", "social_studio.sqlite3")
 
 
-def connect() -> sqlite3.Connection:
+@contextmanager
+def connect() -> Generator[sqlite3.Connection, None, None]:
     connection = sqlite3.connect(database_path())
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_database() -> None:
