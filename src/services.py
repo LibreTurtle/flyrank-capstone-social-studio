@@ -5,6 +5,8 @@ import repositories
 from content import extract_article, title_from_markdown
 from generator import generate_variants
 from profiles import validate_variant
+from publisher_factory import configured_publisher
+from publishers import PublishFailure
 
 
 def ingest_markdown(markdown: str) -> dict:
@@ -91,3 +93,58 @@ def schedule_variant(variant_id: int, scheduled_at: datetime) -> dict:
     timestamp = normalized_time.isoformat(timespec="microseconds")
     idempotency_key = hashlib.sha256(f"{variant_id}:{timestamp}".encode()).hexdigest()
     return repositories.create_slot(variant_id, timestamp, idempotency_key)
+
+
+def publish_slot(slot_id: int) -> dict:
+    slot = repositories.get_slot(slot_id)
+    if slot is None:
+        raise LookupError("Schedule slot not found")
+
+    previous = repositories.get_successful_attempt(slot_id)
+    if previous is not None:
+        return _publication_response(slot_id, previous, idempotent=True)
+
+    publisher = configured_publisher(slot["platform"])
+    claimed = repositories.claim_slot_for_publication(
+        slot_id, publisher.name, datetime.now(UTC).isoformat(timespec="microseconds")
+    )
+    if claimed.get("already_published"):
+        return _publication_response(slot_id, claimed, idempotent=True)
+
+    try:
+        result = publisher.publish(
+            text=claimed["text"], idempotency_key=claimed["idempotency_key"]
+        )
+    except PublishFailure as error:
+        repositories.fail_slot_publication(
+            slot_id, claimed["attempt_id"], str(error), error.uncertain
+        )
+        raise
+    except Exception as error:
+        repositories.fail_slot_publication(
+            slot_id,
+            claimed["attempt_id"],
+            "Publisher failed without confirming delivery.",
+            uncertain=True,
+        )
+        raise PublishFailure(
+            "Publisher did not confirm delivery. Check the target before retrying.",
+            uncertain=True,
+        ) from error
+
+    attempt = repositories.finish_slot_publication(
+        slot_id, claimed["attempt_id"], result.remote_reference, result.preview
+    )
+    return _publication_response(slot_id, attempt, idempotent=False)
+
+
+def _publication_response(slot_id: int, attempt: dict, idempotent: bool) -> dict:
+    return {
+        "slot_id": slot_id,
+        "attempt_id": attempt.get("id", attempt.get("attempt_id")),
+        "adapter": attempt["adapter"],
+        "state": attempt["result"],
+        "remote_reference": attempt["remote_reference"],
+        "preview": attempt["preview"],
+        "idempotent": idempotent,
+    }

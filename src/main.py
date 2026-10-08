@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field, model_validator
 
 import repositories
 from database import initialize_database
+from environment import load_environment_file
 from profiles import PROFILES, validate_variant
+from publishers import PublishFailure
 from services import (
     approve_variant,
     edit_variant,
@@ -16,12 +18,14 @@ from services import (
     ingest_markdown,
     ingest_url,
     reject_variant,
+    publish_slot,
     schedule_variant,
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    load_environment_file()
     initialize_database()
     yield
 
@@ -169,6 +173,19 @@ def schedule(variant_id: int, payload: ScheduleIn) -> dict:
         return schedule_variant(variant_id, payload.scheduled_at)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/slots/{slot_id}/publish")
+def publish(slot_id: int) -> dict:
+    try:
+        return publish_slot(slot_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PublishFailure as error:
+        status_code = 409 if error.uncertain else 502
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
